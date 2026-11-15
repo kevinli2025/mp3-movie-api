@@ -9,6 +9,10 @@ from src import (
     MovieUploadInfo,
     MovieDataResponse,
     MovieProcessingReport,
+    HealthResponse,
+    ProcessConfig,
+    setup_logging,
+    log_requests,
 )
 from src.storage import MOVIE_COLUMNS
 from data_pipeline import create_cleaning_report, process_data, validate_dataframe
@@ -25,8 +29,8 @@ def health_check():
     return {"status": "ok", "version": "1.0.0"}
 
 
-@app.post("/upload", response_model=DatasetInfo)
-async def upload_dataset(file: UploadFile = File(...)):
+@app.post("/upload", response_model=MovieUploadInfo)
+async def upload_movies(file: UploadFile = File(...)):
 
     if Path(file.filename or "").suffix.lower() != ".csv":
         raise HTTPException(
@@ -45,15 +49,34 @@ async def upload_dataset(file: UploadFile = File(...)):
             status_code=400,
             detail="Cannot read CSV"
         )
-    dataset_id = storage.save(df, file.filename)
-    metadata = storage.get_metadata(dataset_id)
     
-    logger.info(f"Uploaded dataset: id={dataset_id}, filename={file.filename}, rows={len(df)}")
+    if set(df.columns) != set(MOVIE_COLUMNS):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid movie columns"
+        )
+    
+    if df.empty:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid empty dataset"
+        )
+    
+    df = df[MOVIE_COLUMNS]
 
-    return metadata
+    storage.save(df)
+    logger.info(f"filename={file.filename}, rows={len(df)}")
 
-@app.get("/datasets/{dataset_id}")
-def get_dataset(dataset_id: int, limit: int = Query(default=100, ge=1)):
+    return {
+        "filename" : file.filename,
+        "rows" : len(df),
+        "columns" : len(df.columns),
+        "column_names" : list(df.columns)
+    }
+
+
+@app.get("/movies", response_model=MovieDataResponse)
+def get_movies(limit: int = Query(default=100, ge=1)):
     dataset = storage.get(dataset_id)
     if dataset is None:
         logger.warning(f"Dataset not found: {dataset_id}")
