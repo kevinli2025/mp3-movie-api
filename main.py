@@ -77,26 +77,40 @@ async def upload_movies(file: UploadFile = File(...)):
 
 @app.get("/movies", response_model=MovieDataResponse)
 def get_movies(limit: int = Query(default=100, ge=1)):
-    dataset = storage.get(dataset_id)
-    if dataset is None:
-        logger.warning(f"Dataset not found: {dataset_id}")
-        raise HTTPException(status_code=404, detail="Dataset not found")
+    records = storage.select_columns(MOVIE_COLUMNS, limit)
+    total_rows = storage.count_movies()
 
-    records = json.loads(dataset.head(limit).to_json(orient="records"))
-    logger.info(f"Retrieved dataset: id={dataset_id}, rows={len(records)}")
-    return {"id": dataset_id, "data": records, "total_rows": len(dataset)}
+    logger.info(f"Retrieved movies: rows={len(records)}")
 
-@app.post(
-    "/datasets/{dataset_id}/process",
-    response_model=ProcessingReport
-)
-def process_dataset(dataset_id: int, config: ProcessConfig):
+    return {
+        "data": records,
+        "total_rows": total_rows
+    }
+
+@app.get("/movies/search", response_model=list[dict])
+def query_movies(
+    columns: list[str] = Query(default=["title"]),
+    min_rating: float = Query(default=0, ge=0, le=10),
+    limit: int = Query(default=100, ge=1)
+):
+    try:
+        records = storage.query_movies(columns, min_rating, limit)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=str(error)
+        ) from error
     
-    """Validate and process a stored dataset using MP1 functions."""
-    dataset = storage.get(dataset_id)
-    if dataset is None:
-        logger.warning(f"Dataset not found: {dataset_id}")
-        raise HTTPException(status_code=404, detail="Dataset not found")
+    logger.info(f"Selected columns: {columns} row count: {len(records)}")
+    return records
+
+@app.post("/movies/process", response_model=MovieProcessingReport)
+def process_movies(config: ProcessConfig):
+    
+    dataset = storage.get()
+    if dataset.empty:
+        logger.warning("No movies to process")
+        raise HTTPException(status_code=400, detail="No movies to process")
 
     settings = config.model_dump()
     validation = settings["validation"]
@@ -115,17 +129,17 @@ def process_dataset(dataset_id: int, config: ProcessConfig):
         processed = process_data(validated, settings)
         cleaning_report = create_cleaning_report(before_processing, processed)
     except ValueError as error:
-        logger.warning(f"Cannot process dataset: id={dataset_id}, error={error}")
+        logger.warning(f"Cannot process movies: error={error}")
         raise HTTPException(status_code=400, detail=str(error)) from error
 
-    storage.update(dataset_id, processed)
+    storage.save(processed)
+
     logger.info(
-        f"Processed dataset: id={dataset_id}, "
+        f"Processed movies: "
         f"validation_removed={validation_rows_removed}, "
         f"rows_before={len(before_processing)}, rows_after={len(processed)}"
     )
     return {
-        "id": dataset_id,
         "validation_rows_removed": validation_rows_removed,
         "cleaning_report": cleaning_report,
     }

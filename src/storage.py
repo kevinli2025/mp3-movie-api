@@ -104,7 +104,7 @@ class MovieStorage:
         selected_columns = ", ".join(["id"] + columns)
         connection = get_connection(self.db_path)
         try:
-            sql_statement = f"SELECT {selected_columns} FROM movies WHERE rating > {min_rating} ORDER BY rating DESC, id LIMIT {limit}"
+            sql_statement = f"SELECT {selected_columns} FROM movies WHERE rating >= {min_rating} ORDER BY rating DESC, id LIMIT {limit}"
             rows = connection.execute(sql_statement).fetchall()
             records = []
             for row in rows:
