@@ -35,6 +35,7 @@ class MovieStorage:
         except sqlite3.Error:
             connection.rollback()
             logger.error(f"Cannot save movies to database")
+            raise
         finally:
             connection.close()
 
