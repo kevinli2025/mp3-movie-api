@@ -5,6 +5,7 @@ from pathlib import Path
 import pandas as pd
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from src import (
+    MovieCache,
     MovieStorage,
     MovieUploadInfo,
     MovieDataResponse,
@@ -20,9 +21,10 @@ from data_pipeline import create_cleaning_report, process_data, validate_datafra
 setup_logging(verbose=True)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Data Processing API", version="1.0.0")
+app = FastAPI(title="Movie API", version="1.0.0")
 app.middleware("http")(log_requests)
 storage = MovieStorage()
+cache = MovieCache()
 
 @app.get("/health", response_model=HealthResponse)
 def health_check():
@@ -65,6 +67,7 @@ async def upload_movies(file: UploadFile = File(...)):
     df = df[MOVIE_COLUMNS]
 
     storage.save(df)
+    cache.invalidate()
     logger.info(f"filename={file.filename}, rows={len(df)}")
 
     return {
@@ -77,15 +80,28 @@ async def upload_movies(file: UploadFile = File(...)):
 
 @app.get("/movies", response_model=MovieDataResponse)
 def get_movies(limit: int = Query(default=100, ge=1)):
+
+    # First, check if the response is already cached
+    cached = cache.get(limit)
+
+    if cached is not None:
+        logger.info(f"Cache hit for limit={limit}")
+        return cached
+
+    # Cache miss: retrieve from SQLite
     records = storage.select_columns(MOVIE_COLUMNS, limit)
     total_rows = storage.count_movies()
 
-    logger.info(f"Retrieved movies: rows={len(records)}")
-
-    return {
+    response = {
         "data": records,
         "total_rows": total_rows
     }
+
+    # Save the response for future requests
+    cache.set(limit, response)
+
+    logger.info(f"Retrieved movies: returned_rows={len(records)}")
+    return response
 
 @app.get("/movies/search", response_model=list[dict])
 def query_movies(
@@ -133,6 +149,7 @@ def process_movies(config: ProcessConfig):
         raise HTTPException(status_code=400, detail=str(error)) from error
 
     storage.save(processed)
+    cache.invalidate()
 
     logger.info(
         f"Processed movies: "
